@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, isSupabaseConfigured, supabaseConfigError } from '../lib/supabase';
 
 const AuthContext = createContext({});
 
@@ -8,6 +8,11 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setLoading(false);
+      return undefined;
+    }
+
     let isMounted = true;
 
     const bootstrapSession = async () => {
@@ -38,11 +43,25 @@ export const AuthProvider = ({ children }) => {
     };
   }, []);
 
-  const signIn = (email, password) => supabase.auth.signInWithPassword({ email, password });
-  const signOut = () => supabase.auth.signOut();
+  const signIn = (email, password) => {
+    if (!supabase) {
+      return Promise.resolve({
+        data: { user: null },
+        error: { message: supabaseConfigError || 'Supabase is not configured.' },
+      });
+    }
+    return supabase.auth.signInWithPassword({ email, password });
+  };
+
+  const signOut = () => {
+    if (!supabase) {
+      return Promise.resolve({ error: null });
+    }
+    return supabase.auth.signOut();
+  };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signOut, isSupabaseConfigured, supabaseConfigError }}>
       {!loading && children}
     </AuthContext.Provider>
   );
