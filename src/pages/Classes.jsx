@@ -133,7 +133,7 @@ const Classes = () => {
               </p>
               {c.is_graduation_class ? (
                 <div style={{ marginTop: '0.7rem', display: 'inline-flex', padding: '4px 10px', borderRadius: '999px', backgroundColor: 'var(--color-starbucks-green-soft)', color: 'var(--color-starbucks-green)', fontSize: '0.75rem', fontWeight: 700 }}>
-                  졸업 구분
+                  종강 구분
                 </div>
               ) : null}
             </div>
@@ -213,8 +213,8 @@ const Classes = () => {
                   {(editingClass ? editingClass.is_graduation_class : formData.is_graduation_class) ? <span style={{ color: '#fff', fontSize: '0.7rem', fontWeight: 700 }}>✓</span> : null}
                 </div>
                 <div>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--color-text-dark)' }}>졸업 구분</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>이 클래스를 수강생에게 등록할 때 졸업일 입력이 필요합니다.</div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--color-text-dark)' }}>종강 구분</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>이 클래스는 수강생 등록 시 종강 관련 정보를 함께 기록할 수 있습니다.</div>
                 </div>
               </div>
               

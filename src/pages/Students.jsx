@@ -4,6 +4,90 @@ import { Plus, Search, User, Phone, Calendar, Edit2, Trash2, X, Check, BookOpen,
 import { CURRICULUM_OPTIONS, TOOL_TYPE_OPTIONS, formatEnrollmentLabel } from '../lib/enrollment';
 import { countScheduledSessions, generateScheduleEntries, maybeAutoRenewEnrollment } from '../lib/enrollmentScheduling';
 
+const DateSelector = ({ label, value, onChange, required = false, compact = false }) => {
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: 31 }, (_, index) => currentYear + 5 - index);
+  const months = Array.from({ length: 12 }, (_, index) => index + 1);
+  const parseValue = (nextValue) => {
+    const nextParts = (nextValue || '').split('-');
+    return {
+      year: nextParts[0] || '',
+      month: nextParts[1] || '',
+      day: nextParts[2] || '',
+    };
+  };
+  const [parts, setParts] = useState(parseValue(value));
+  const { year, month, day } = parts;
+  const daysInMonth = year && month ? new Date(Number(year), Number(month), 0).getDate() : 31;
+  const days = Array.from({ length: daysInMonth }, (_, index) => index + 1);
+  const completedValue = year && month && day
+    ? `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    : '';
+
+  useEffect(() => {
+    if (value && value !== completedValue) {
+      setParts(parseValue(value));
+    }
+    if (!value && completedValue) {
+      setParts({ year: '', month: '', day: '' });
+    }
+  }, [value]);
+
+  const updatePart = (part, partValue) => {
+    const nextParts = {
+      year,
+      month,
+      day,
+      [part]: partValue,
+    };
+
+    if (nextParts.year && nextParts.month) {
+      const maxDay = new Date(Number(nextParts.year), Number(nextParts.month), 0).getDate();
+      if (nextParts.day && Number(nextParts.day) > maxDay) {
+        nextParts.day = String(maxDay);
+      }
+    }
+
+    setParts(nextParts);
+
+    if (nextParts.year && nextParts.month && nextParts.day) {
+      onChange(`${nextParts.year}-${String(nextParts.month).padStart(2, '0')}-${String(nextParts.day).padStart(2, '0')}`);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: compact ? '0.2rem' : '2.5rem' }}>
+      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>{label}</label>
+      <input
+        type="hidden"
+        value={completedValue}
+        onChange={() => {}}
+        required={required}
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr 1fr', gap: compact ? '0.45rem' : '0.7rem', marginTop: '0.55rem' }}>
+        <select value={year} onChange={e => updatePart('year', e.target.value)} required={required}>
+          <option value="">연도</option>
+          {years.map(option => (
+            <option key={option} value={option}>{option}년</option>
+          ))}
+        </select>
+        <select value={month} onChange={e => updatePart('month', e.target.value)} required={required}>
+          <option value="">월</option>
+          {months.map(option => (
+            <option key={option} value={option}>{option}월</option>
+          ))}
+        </select>
+        <select value={day} onChange={e => updatePart('day', e.target.value)} required={required}>
+          <option value="">일</option>
+          {days.map(option => (
+            <option key={option} value={option}>{option}일</option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+};
+
 const Students = () => {
   const dayOptions = ['월', '화', '수', '목', '금', '토'];
   const formatDateInputValue = (value) => {
@@ -27,7 +111,7 @@ const Students = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [editingStudent, setEditingStudent] = useState(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [formData, setFormData] = useState({ name: '', phone: '', created_at: new Date().toISOString().split('T')[0] });
+  const [formData, setFormData] = useState({ name: '', phone: '', registered_at: new Date().toISOString().split('T')[0] });
   const [enrollingStudent, setEnrollingStudent] = useState(null);
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedToolType, setSelectedToolType] = useState(TOOL_TYPE_OPTIONS[0]);
@@ -35,12 +119,13 @@ const Students = () => {
   const [selectedScheduleDays, setSelectedScheduleDays] = useState([]);
   const [classEndDate, setClassEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [graduationDate, setGraduationDate] = useState('');
+  const [isCourseCompleted, setIsCourseCompleted] = useState(false);
+  const [isFinalClass, setIsFinalClass] = useState(false);
   const [preferredTime, setPreferredTime] = useState('');
   const [selectedStudentForLog, setSelectedStudentForLog] = useState(null);
   const [attendanceLog, setAttendanceLog] = useState([]);
   const [isLogLoading, setIsLogLoading] = useState(false);
-  const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
-  const [newSessionData, setNewSessionData] = useState({ enrollmentId: '', date: '', time: '09:00', consumeSlot: true });
+  const [newSessionData, setNewSessionData] = useState({ enrollmentId: '', date: new Date().toISOString().split('T')[0], logType: 'participated' });
   const [confirmModal, setConfirmModal] = useState({ 
     isOpen: false, 
     title: '', 
@@ -86,7 +171,7 @@ const Students = () => {
         return {
           ...s,
           lastAttended: attendedDates.length > 0 ? attendedDates[0].toLocaleDateString() : '기록 없음',
-          registeredAt: s.created_at ? new Date(s.created_at).toLocaleDateString() : '기록 없음'
+          registeredAt: s.registered_at ? new Date(s.registered_at).toLocaleDateString() : '기록 없음'
         };
       });
       setStudents(processed);
@@ -113,7 +198,13 @@ const Students = () => {
   const handleAddManualSession = async (e) => {
     e.preventDefault();
     try {
-      const scheduledAt = new Date(`${newSessionData.date}T${newSessionData.time}:00`).toISOString();
+      const scheduledAt = new Date(`${newSessionData.date}T12:00:00+09:00`).toISOString();
+      const status =
+        newSessionData.logType === 'participated'
+          ? 'attended'
+          : newSessionData.logType === 'postponed'
+            ? 'postponed'
+            : 'deducted';
       
       // 0. Check for existing session at the same time
       const { data: existing, error: checkError } = await supabase
@@ -133,39 +224,32 @@ const Students = () => {
       }
 
       // 1. Add the new session
-      const { error: insertError } = await supabase
+      const { data: insertedSession, error: insertError } = await supabase
         .from('schedule')
         .insert([{
           student_id: selectedStudentForLog.id,
           enrollment_id: newSessionData.enrollmentId,
           scheduled_at: scheduledAt,
-          status: 'scheduled'
-        }]);
+          status
+        }])
+        .select()
+        .single();
 
       if (insertError) throw insertError;
 
-      // 2. If "Consume Slot" is ticked, remove the last scheduled session
-      if (newSessionData.consumeSlot) {
-        const { data: futureSessions, error: fetchError } = await supabase
-          .from('schedule')
-          .select('id')
-          .eq('enrollment_id', newSessionData.enrollmentId)
-          .eq('status', 'scheduled')
-          .neq('scheduled_at', scheduledAt) // Don't delete the one we just added
-          .order('scheduled_at', { ascending: false })
-          .limit(1);
-
-        if (!fetchError && futureSessions && futureSessions.length > 0) {
-          await supabase
-            .from('schedule')
-            .delete()
-            .eq('id', futureSessions[0].id);
-        }
+      if (status === 'attended') {
+        await supabase
+          .from('attendance')
+          .insert([{ student_id: selectedStudentForLog.id, schedule_id: insertedSession.id }]);
       }
 
-      setIsAddSessionModalOpen(false);
+      setNewSessionData({
+        enrollmentId: selectedStudentForLog.enrollments?.[0]?.id || '',
+        date: new Date().toISOString().split('T')[0],
+        logType: 'participated',
+      });
       fetchAttendanceLog(selectedStudentForLog);
-      fetchData(); // Refresh main view
+      fetchData();
     } catch (err) {
       console.error('Error adding manual session:', err);
       alert('일정을 추가하는 중 오류가 발생했습니다.');
@@ -232,11 +316,11 @@ const Students = () => {
     e.preventDefault();
     const { error } = await supabase.from('students').insert([{
       ...formData,
-      created_at: toStoredDateTime(formData.created_at),
+      registered_at: toStoredDateTime(formData.registered_at),
     }]);
     if (!error) {
       setIsAddModalOpen(false);
-      setFormData({ name: '', phone: '', created_at: new Date().toISOString().split('T')[0] });
+      setFormData({ name: '', phone: '', registered_at: new Date().toISOString().split('T')[0] });
       fetchData();
       return;
     }
@@ -248,7 +332,7 @@ const Students = () => {
     const { error } = await supabase.from('students').update({
       name: editingStudent.name,
       phone: editingStudent.phone,
-      created_at: toStoredDateTime(editingStudent.created_at),
+      registered_at: toStoredDateTime(editingStudent.registered_at),
     }).eq('id', editingStudent.id);
 
     if (!error) {
@@ -353,8 +437,9 @@ const Students = () => {
   const handleAddEnrollment = async (e) => {
     e.preventDefault();
     const targetClass = classes.find(c => c.id === selectedClassId);
-    if (!selectedClassId || !enrollingStudent || selectedScheduleDays.length === 0 || !classEndDate) return;
-    if (targetClass?.is_graduation_class && !graduationDate) return;
+    if (!selectedClassId || !enrollingStudent || selectedScheduleDays.length === 0) return;
+    if (isFinalClass && !classEndDate) return;
+    if (isCourseCompleted && !graduationDate) return;
 
     try {
       // 1. Create the enrollment
@@ -369,8 +454,10 @@ const Students = () => {
           sessions_total: targetClass.total_sessions,
           sessions_left: targetClass.total_sessions,
           preferred_time: preferredTime,
-          class_end_date: new Date(`${classEndDate}T09:00:00`).toISOString(),
-          graduation_date: targetClass.is_graduation_class && graduationDate ? new Date(`${graduationDate}T09:00:00`).toISOString() : null,
+          class_end_date: isFinalClass && classEndDate ? new Date(`${classEndDate}T09:00:00`).toISOString() : null,
+          graduation_date: isCourseCompleted && graduationDate ? new Date(`${graduationDate}T09:00:00`).toISOString() : null,
+          is_graduated: isCourseCompleted,
+          is_final_class: isFinalClass,
         }])
         .select()
         .single();
@@ -396,6 +483,8 @@ const Students = () => {
     setSelectedScheduleDays([]);
     setClassEndDate(new Date().toISOString().split('T')[0]);
     setGraduationDate('');
+    setIsCourseCompleted(false);
+    setIsFinalClass(false);
     setPreferredTime('');
   };
 
@@ -517,17 +606,8 @@ const Students = () => {
             </div>
 
             <div style={{ minWidth: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.7rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
                 <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>수강 중인 클래스</span>
-                <button 
-                  onClick={() => {
-                    resetEnrollmentForm();
-                    setEnrollingStudent(s);
-                  }}
-                  style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-starbucks-green)', background: 'var(--color-starbucks-green-soft)', padding: '4px 10px', borderRadius: '6px' }}
-                >
-                  + 추가
-                </button>
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 {s.enrollments && s.enrollments.length > 0 ? (
@@ -544,7 +624,9 @@ const Students = () => {
                       <BookOpen size={14} color="var(--color-starbucks-green)" />
                       <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--color-text-dark)' }}>{formatEnrollmentLabel(e)}</span>
                       {e.class_end_date ? <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>종료 {new Date(e.class_end_date).toLocaleDateString()}</span> : null}
-                      {e.graduation_date ? <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>졸업 {new Date(e.graduation_date).toLocaleDateString()}</span> : null}
+                      {e.graduation_date ? <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>종강 {new Date(e.graduation_date).toLocaleDateString()}</span> : null}
+                      {e.is_graduated ? <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>종강 완료</span> : null}
+                      {e.is_final_class ? <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>마지막 수업</span> : null}
                       <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-starbucks-green)' }}>
                         {countScheduledSessions(s.schedule || [], e.id)}회 남음
                       </span>
@@ -574,18 +656,26 @@ const Students = () => {
                   <p style={{ fontSize: '0.85rem', color: '#9CA3AF', fontStyle: 'italic' }}>등록된 클래스가 없습니다.</p>
                 )}
               </div>
+              <div style={{ display: 'flex', gap: '8px', marginTop: '0.7rem' }}>
+                <button 
+                  onClick={() => {
+                    resetEnrollmentForm();
+                    setEnrollingStudent(s);
+                  }}
+                  style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-starbucks-green)', background: 'var(--color-starbucks-green-soft)', padding: '4px 10px', borderRadius: '6px' }}
+                >
+                  + 추가
+                </button>
+                <button
+                  onClick={() => fetchAttendanceLog(s)}
+                  style={{ fontSize: '0.72rem', fontWeight: 700, color: '#4b5563', background: '#F3F4F6', padding: '4px 10px', borderRadius: '6px' }}
+                >
+                  수업 기록
+                </button>
+              </div>
             </div>
 
             <div style={{ display: 'flex', gap: '4px', justifySelf: 'end' }}>
-              <button 
-                onClick={() => fetchAttendanceLog(s)}
-                title="출석 로그"
-                style={{ background: 'none', border: 'none', color: 'var(--color-starbucks-green)', cursor: 'pointer', padding: '6px', borderRadius: '8px', transition: 'all 0.2s' }}
-                onMouseEnter={e => e.currentTarget.style.backgroundColor = 'var(--color-starbucks-green-soft)'}
-                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-              >
-                <Calendar size={16} />
-              </button>
                 <button 
                   onClick={() => setEditingStudent(s)}
                 style={{ background: 'none', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: '6px', borderRadius: '8px', transition: 'all 0.2s' }}
@@ -642,19 +732,16 @@ const Students = () => {
                 />
               </div>
 
-              <div style={{ marginBottom: '2.5rem' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>등록일</label>
-                <input
-                  type="date"
-                  value={editingStudent
-                    ? formatDateInputValue(editingStudent.created_at)
-                    : formData.created_at}
-                  onChange={e => editingStudent
-                    ? setEditingStudent({ ...editingStudent, created_at: e.target.value })
-                    : setFormData({ ...formData, created_at: e.target.value })}
-                  required
-                />
-              </div>
+              <DateSelector
+                label="등록일"
+                value={editingStudent
+                  ? formatDateInputValue(editingStudent.registered_at)
+                  : formData.registered_at}
+                onChange={(nextValue) => editingStudent
+                  ? setEditingStudent({ ...editingStudent, registered_at: nextValue })
+                  : setFormData({ ...formData, registered_at: nextValue })}
+                required
+              />
               
               <div style={{ display: 'flex', gap: '1rem' }}>
                 <button type="submit" className="btn-primary" style={{ flex: 1 }}>{editingStudent ? '저장하기' : '등록하기'}</button>
@@ -672,7 +759,7 @@ const Students = () => {
           backgroundColor: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: 1000
         }} onClick={() => { setEnrollingStudent(null); resetEnrollmentForm(); }}>
-          <div className="card" style={{ width: '90%', maxWidth: '400px', padding: '2.5rem' }} onClick={e => e.stopPropagation()}>
+          <div className="card" style={{ width: '94%', maxWidth: '820px', padding: '2.5rem' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
               <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>클래스 수강 등록</h2>
               <button onClick={() => { setEnrollingStudent(null); resetEnrollmentForm(); }} style={{ background: 'none', color: '#9CA3AF' }}><X size={20} /></button>
@@ -683,173 +770,263 @@ const Students = () => {
             </p>
 
             <form onSubmit={handleAddEnrollment}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>도구 유형</label>
-                  <select
-                    value={selectedToolType}
-                    onChange={e => setSelectedToolType(e.target.value)}
-                  >
-                    {TOOL_TYPE_OPTIONS.map(option => (
-                      <option key={option} value={option}>{option}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>커리큘럼 난이도</label>
-                  <select
-                    value={selectedDifficulty}
-                    onChange={e => setSelectedDifficulty(e.target.value)}
-                  >
-                    {CURRICULUM_OPTIONS.map(option => (
-                      <option key={option} value={option}>{option}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>클래스 선택</label>
-                <select 
-                  value={selectedClassId} 
-                  onChange={e => setSelectedClassId(e.target.value)}
-                  required
-                >
-                  <option value="">{classes.length > 0 ? '클래스를 선택하세요' : '등록된 클래스가 없습니다'}</option>
-                  {classes.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.8rem', display: 'block' }}>수업 요일 선택</label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {dayOptions.map(day => {
-                    const isActive = selectedScheduleDays.includes(day);
-                    const toggleDay = () => {
-                      setSelectedScheduleDays(prev =>
-                        prev.includes(day)
-                          ? prev.filter(item => item !== day)
-                          : [...prev, day]
-                      );
-                    };
-
-                    return (
-                      <button
-                        key={day}
-                        type="button"
-                        onClick={toggleDay}
-                        style={{
-                          flex: 1,
-                          padding: '10px 0',
-                          borderRadius: '10px',
-                          fontSize: '0.85rem',
-                          fontWeight: 700,
-                          border: isActive ? '1px solid var(--color-starbucks-green)' : '1px solid #E5E7EB',
-                          backgroundColor: isActive ? 'var(--color-starbucks-green-soft)' : '#F9FAFB',
-                          color: isActive ? 'var(--color-starbucks-green)' : '#9CA3AF',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s'
-                        }}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.9rem', marginBottom: '0.9rem' }}>
+                <div className="glass-panel" style={{ padding: '1rem' }}>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.8rem' }}>기본 정보</div>
+                  <div style={{ display: 'grid', gap: '0.9rem' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>도구 유형</label>
+                      <select
+                        value={selectedToolType}
+                        onChange={e => setSelectedToolType(e.target.value)}
                       >
-                        {day}
-                      </button>
-                    );
-                  })}
+                        {TOOL_TYPE_OPTIONS.map(option => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>커리큘럼 난이도</label>
+                      <select
+                        value={selectedDifficulty}
+                        onChange={e => setSelectedDifficulty(e.target.value)}
+                      >
+                        {CURRICULUM_OPTIONS.map(option => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>클래스 선택</label>
+                      <select 
+                        value={selectedClassId} 
+                        onChange={e => setSelectedClassId(e.target.value)}
+                        required
+                      >
+                        <option value="">{classes.length > 0 ? '클래스를 선택하세요' : '등록된 클래스가 없습니다'}</option>
+                        {classes.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="glass-panel" style={{ padding: '1rem' }}>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.8rem' }}>일정 설정</div>
+                  <div style={{ display: 'grid', gap: '0.9rem' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.8rem', display: 'block' }}>수업 요일 선택</label>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        {dayOptions.map(day => {
+                          const isActive = selectedScheduleDays.includes(day);
+                          const toggleDay = () => {
+                            setSelectedScheduleDays(prev =>
+                              prev.includes(day)
+                                ? prev.filter(item => item !== day)
+                                : [...prev, day]
+                            );
+                          };
+
+                          return (
+                            <button
+                              key={day}
+                              type="button"
+                              onClick={toggleDay}
+                              style={{
+                                flex: 1,
+                                padding: '8px 0',
+                                borderRadius: '10px',
+                                fontSize: '0.8rem',
+                                fontWeight: 700,
+                                border: isActive ? '1px solid var(--color-starbucks-green)' : '1px solid #E5E7EB',
+                                backgroundColor: isActive ? 'var(--color-starbucks-green-soft)' : '#F9FAFB',
+                                color: isActive ? 'var(--color-starbucks-green)' : '#9CA3AF',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              {day}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>수강 희망 시간</label>
+                      <select 
+                        value={preferredTime} 
+                        onChange={e => setPreferredTime(e.target.value)}
+                        required
+                      >
+                        <option value="">시간을 선택하세요</option>
+                        {Array.from({ length: 11 }, (_, i) => i + 9).map(hour => (
+                          <React.Fragment key={hour}>
+                            <option value={`${hour}:00`}>{hour}:00</option>
+                            <option value={`${hour}:30`}>{hour}:30</option>
+                          </React.Fragment>
+                        ))}
+                        <option value="20:00">20:00</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              <div style={{ marginBottom: '2.5rem' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>수강 희망 시간</label>
-                <select 
-                  value={preferredTime} 
-                  onChange={e => setPreferredTime(e.target.value)}
-                  required
+              <div className="glass-panel" style={{ padding: '1rem', marginBottom: '1.2rem' }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.8rem' }}>상태 설정</div>
+                <div style={{ display: 'grid', gap: '0.9rem' }}>
+                <div
+                  style={{
+                    padding: '0.85rem 1rem',
+                    backgroundColor: 'var(--color-starbucks-green-soft)',
+                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => setIsCourseCompleted(prev => !prev)}
                 >
-                  <option value="">시간을 선택하세요</option>
-                  {Array.from({ length: 11 }, (_, i) => i + 9).map(hour => (
-                    <React.Fragment key={hour}>
-                      <option value={`${hour}:00`}>{hour}:00</option>
-                      <option value={`${hour}:30`}>{hour}:30</option>
-                    </React.Fragment>
-                  ))}
-                  <option value="20:00">20:00</option>
-                </select>
+                  <div style={{
+                    width: '18px',
+                    height: '18px',
+                    borderRadius: '6px',
+                    border: '2px solid var(--color-starbucks-green)',
+                    backgroundColor: isCourseCompleted ? 'var(--color-starbucks-green)' : 'transparent',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    {isCourseCompleted ? <span style={{ color: '#fff', fontSize: '0.68rem', fontWeight: 700 }}>✓</span> : null}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--color-text-dark)' }}>종강</div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>이 수강생이 종강 상태인지 표시합니다.</div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    padding: '0.85rem 1rem',
+                    backgroundColor: 'rgba(255,255,255,0.7)',
+                    border: '1px solid rgba(24, 33, 29, 0.08)',
+                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => setIsFinalClass(prev => !prev)}
+                >
+                  <div style={{
+                    width: '18px',
+                    height: '18px',
+                    borderRadius: '6px',
+                    border: '2px solid var(--color-starbucks-green)',
+                    backgroundColor: isFinalClass ? 'var(--color-starbucks-green)' : 'transparent',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    {isFinalClass ? <span style={{ color: '#fff', fontSize: '0.68rem', fontWeight: 700 }}>✓</span> : null}
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--color-text-dark)' }}>마지막 수업</div>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>현재 등록이 마지막 수업 단계인지 표시합니다.</div>
+                  </div>
+                </div>
+                </div>
               </div>
 
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>수업 종료일</label>
-                <input
-                  type="date"
+              {isFinalClass ? (
+                <DateSelector
+                  label="수업 종료일"
                   value={classEndDate}
-                  onChange={e => setClassEndDate(e.target.value)}
+                  onChange={setClassEndDate}
                   required
                 />
-              </div>
+              ) : null}
 
-              {selectedClass?.is_graduation_class ? (
-                <div style={{ marginBottom: '2.5rem' }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>졸업일</label>
-                  <input
-                    type="date"
-                    value={graduationDate}
-                    onChange={e => setGraduationDate(e.target.value)}
-                    required
-                  />
-                </div>
+              {isCourseCompleted ? (
+                <DateSelector
+                  label="종강일"
+                  value={graduationDate}
+                  onChange={setGraduationDate}
+                  required
+                />
               ) : null}
               
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <button type="submit" className="btn-primary" style={{ flex: 1 }} disabled={selectedScheduleDays.length === 0 || !classEndDate || (selectedClass?.is_graduation_class && !graduationDate)}>수강 등록</button>
-                <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#F3F4F6' }} onClick={() => { setEnrollingStudent(null); resetEnrollmentForm(); }}>취소</button>
+                <button type="submit" className="btn-primary" style={{ flex: 1, padding: '0.72rem 1rem', fontSize: '0.88rem' }} disabled={selectedScheduleDays.length === 0 || (isFinalClass && !classEndDate) || (isCourseCompleted && !graduationDate)}>수강 등록</button>
+                <button type="button" className="btn-primary" style={{ flex: 1, padding: '0.72rem 1rem', fontSize: '0.88rem', backgroundColor: '#F3F4F6', color: '#F3F4F6' }} onClick={() => { setEnrollingStudent(null); resetEnrollmentForm(); }}>취소</button>
               </div>
             </form>
           </div>
         </div>
       )}
-      {/* Attendance Log Modal */}
+      {/* Lesson Log Modal */}
       {selectedStudentForLog && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: 1050
         }} onClick={() => setSelectedStudentForLog(null)}>
-          <div className="card" style={{ width: '95%', maxWidth: '600px', maxHeight: '80vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+          <div className="card" style={{ width: '95%', maxWidth: '760px', maxHeight: '84vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
             <header style={{ padding: '1.5rem 2rem', borderBottom: 'var(--border-thin)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#F9FAFB' }}>
               <div>
-                <h2 style={{ fontSize: '1.2rem', fontWeight: 800 }}>{selectedStudentForLog.name} 출석 로그</h2>
-                <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>전체 수강 이력 및 일정 관리</p>
+                <h2 style={{ fontSize: '1.2rem', fontWeight: 800 }}>{selectedStudentForLog.name} 수업 기록</h2>
+                <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>참여, 차감, 일정 이력을 한 곳에서 관리합니다.</p>
               </div>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <button 
-                  onClick={() => {
-                    setNewSessionData({ 
-                      enrollmentId: selectedStudentForLog.enrollments?.[0]?.id || '', 
-                      date: new Date().toISOString().split('T')[0], 
-                      time: '09:00', 
-                      consumeSlot: true 
-                    });
-                    setIsAddSessionModalOpen(true);
-                  }}
-                  style={{ 
-                    fontSize: '0.8rem', 
-                    fontWeight: 700, 
-                    color: 'var(--color-white)', 
-                    backgroundColor: 'var(--color-starbucks-green)', 
-                    padding: '6px 14px', 
-                    borderRadius: '8px',
-                    border: 'none',
-                    cursor: 'pointer'
-                  }}
-                >
-                  + 수업 추가
-                </button>
                 <button onClick={() => setSelectedStudentForLog(null)} style={{ background: 'none', color: '#9CA3AF' }}><X size={24} /></button>
               </div>
             </header>
 
             <div style={{ overflowY: 'auto', padding: '1.5rem 2rem' }}>
+              <div className="glass-panel" style={{ padding: '0.7rem 0.85rem', marginBottom: '0.85rem' }}>
+                <div style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.8rem' }}>수동 입력</div>
+                <form onSubmit={handleAddManualSession}>
+                  <div style={{ display: 'grid', gap: '0.45rem' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>클래스 선택</label>
+                      <select 
+                        value={newSessionData.enrollmentId} 
+                        onChange={e => setNewSessionData({...newSessionData, enrollmentId: e.target.value})}
+                        required
+                      >
+                        {selectedStudentForLog.enrollments.map(e => (
+                          <option key={e.id} value={e.id}>{formatEnrollmentLabel(e)}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <DateSelector
+                      label="날짜"
+                      value={newSessionData.date}
+                      onChange={(date) => setNewSessionData({ ...newSessionData, date })}
+                      required
+                      compact
+                    />
+                    <div>
+                      <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>기록 유형</label>
+                      <select
+                        value={newSessionData.logType}
+                        onChange={e => setNewSessionData({ ...newSessionData, logType: e.target.value })}
+                        required
+                      >
+                        <option value="participated">참여</option>
+                        <option value="deducted">차감</option>
+                        <option value="postponed">연기</option>
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.25rem' }}>
+                      <button type="submit" className="btn-primary" style={{ padding: '0.68rem 0.92rem', fontSize: '0.84rem', whiteSpace: 'nowrap' }}>기록 추가</button>
+                    </div>
+                  </div>
+                </form>
+              </div>
+
               {isLogLoading ? (
                 <p style={{ textAlign: 'center', padding: '2rem' }}>로딩 중...</p>
               ) : attendanceLog.length === 0 ? (
@@ -861,7 +1038,7 @@ const Students = () => {
                       <tr style={{ textAlign: 'left', borderBottom: '2px solid #F3F4F6' }}>
                         <th style={{ padding: '0.8rem 0', fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>날짜</th>
                         <th style={{ padding: '0.8rem 0', fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>클래스</th>
-                        <th style={{ padding: '0.8rem 0', fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>상태</th>
+                        <th style={{ padding: '0.8rem 0', fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>기록</th>
                         <th style={{ padding: '0.8rem 0', fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', width: '40px' }}></th>
                       </tr>
                     </thead>
@@ -886,14 +1063,17 @@ const Students = () => {
                                 border: 'none',
                                 backgroundColor: 
                                   item.status === 'attended' ? '#D1FAE5' : 
+                                  item.status === 'deducted' ? '#FEF3C7' :
                                   item.status === 'absent' ? '#FEE2E2' : '#F3F4F6',
                                 color: 
                                   item.status === 'attended' ? '#065F46' : 
+                                  item.status === 'deducted' ? '#92400E' :
                                   item.status === 'absent' ? '#991B1B' : '#374151'
                               }}
                             >
                               <option value="scheduled">예정</option>
-                              <option value="attended">출석</option>
+                              <option value="attended">참여</option>
+                              <option value="deducted">차감</option>
                               <option value="absent">결석</option>
                               <option value="postponed">연기</option>
                             </select>
@@ -915,98 +1095,6 @@ const Students = () => {
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Add Manual Session Modal */}
-      {isAddSessionModalOpen && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 1100
-        }} onClick={() => setIsAddSessionModalOpen(false)}>
-          <div className="card" style={{ width: '90%', maxWidth: '400px', padding: '2.5rem' }} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-              <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>추가 수업 등록</h2>
-              <button onClick={() => setIsAddSessionModalOpen(false)} style={{ background: 'none', color: '#9CA3AF' }}><X size={20} /></button>
-            </div>
-            
-            <form onSubmit={handleAddManualSession}>
-              <div style={{ marginBottom: '1.5rem' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>클래스 선택</label>
-                <select 
-                  value={newSessionData.enrollmentId} 
-                  onChange={e => setNewSessionData({...newSessionData, enrollmentId: e.target.value})}
-                  required
-                >
-                  {selectedStudentForLog.enrollments.map(e => (
-                    <option key={e.id} value={e.id}>{formatEnrollmentLabel(e)}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>날짜</label>
-                  <input 
-                    type="date" 
-                    value={newSessionData.date} 
-                    onChange={e => setNewSessionData({...newSessionData, date: e.target.value})}
-                    required 
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>시간</label>
-                  <select 
-                    value={newSessionData.time} 
-                    onChange={e => setNewSessionData({...newSessionData, time: e.target.value})}
-                    required
-                  >
-                    {Array.from({ length: 12 }, (_, i) => i + 9).map(hour => (
-                      <React.Fragment key={hour}>
-                        <option value={`${hour.toString().padStart(2, '0')}:00`}>{hour}:00</option>
-                        <option value={`${hour.toString().padStart(2, '0')}:30`}>{hour}:30</option>
-                      </React.Fragment>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ 
-                marginBottom: '2.5rem', 
-                padding: '1rem', 
-                backgroundColor: 'var(--color-starbucks-green-soft)', 
-                borderRadius: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                cursor: 'pointer'
-              }} onClick={() => setNewSessionData({...newSessionData, consumeSlot: !newSessionData.consumeSlot})}>
-                <div style={{
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '6px',
-                  border: '2px solid var(--color-starbucks-green)',
-                  backgroundColor: newSessionData.consumeSlot ? 'var(--color-starbucks-green)' : 'transparent',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  transition: 'all 0.2s'
-                }}>
-                  {newSessionData.consumeSlot && <Check size={14} color="white" />}
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--color-text-dark)' }}>정규 수업 차감</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>기존 남은 수업 중 하나를 대체합니다</div>
-                </div>
-              </div>
-              
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <button type="submit" className="btn-primary" style={{ flex: 1 }}>수업 추가</button>
-                <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#F3F4F6' }} onClick={() => setIsAddSessionModalOpen(false)}>취소</button>
-              </div>
-            </form>
           </div>
         </div>
       )}
