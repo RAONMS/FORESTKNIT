@@ -1,22 +1,40 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Plus, Search, User, Phone, Calendar, Edit2, Trash2, X, Check, BookOpen, ChevronRight, Clock, AlertCircle } from 'lucide-react';
-import { CURRICULUM_OPTIONS, TOOL_TYPE_OPTIONS, formatEnrollmentLabel, getEnrollmentDifficulty, getEnrollmentToolType } from '../lib/enrollment';
+import { CURRICULUM_OPTIONS, TOOL_TYPE_OPTIONS, formatEnrollmentLabel } from '../lib/enrollment';
+import { countScheduledSessions, generateScheduleEntries, maybeAutoRenewEnrollment } from '../lib/enrollmentScheduling';
 
 const Students = () => {
   const dayOptions = ['월', '화', '수', '목', '금', '토'];
+  const formatDateInputValue = (value) => {
+    if (!value) return '';
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().split('T')[0];
+  };
+  const toStoredDateTime = (dateText) => dateText ? `${dateText}T12:00:00+09:00` : null;
+  const formatPhoneNumber = (value) => {
+    const digits = value.replace(/\D/g, '').slice(0, 11);
+    if (digits.length < 4) return digits;
+    if (digits.length < 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+    if (digits.length < 11) return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+    return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`;
+  };
   const [students, setStudents] = useState([]);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [editingStudent, setEditingStudent] = useState(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [formData, setFormData] = useState({ name: '', phone: '' });
+  const [formData, setFormData] = useState({ name: '', phone: '', created_at: new Date().toISOString().split('T')[0] });
   const [enrollingStudent, setEnrollingStudent] = useState(null);
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedToolType, setSelectedToolType] = useState(TOOL_TYPE_OPTIONS[0]);
   const [selectedDifficulty, setSelectedDifficulty] = useState(CURRICULUM_OPTIONS[0]);
   const [selectedScheduleDays, setSelectedScheduleDays] = useState([]);
+  const [classEndDate, setClassEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [graduationDate, setGraduationDate] = useState('');
   const [preferredTime, setPreferredTime] = useState('');
   const [selectedStudentForLog, setSelectedStudentForLog] = useState(null);
   const [attendanceLog, setAttendanceLog] = useState([]);
@@ -67,7 +85,8 @@ const Students = () => {
         
         return {
           ...s,
-          lastAttended: attendedDates.length > 0 ? attendedDates[0].toLocaleDateString() : '기록 없음'
+          lastAttended: attendedDates.length > 0 ? attendedDates[0].toLocaleDateString() : '기록 없음',
+          registeredAt: s.created_at ? new Date(s.created_at).toLocaleDateString() : '기록 없음'
         };
       });
       setStudents(processed);
@@ -81,7 +100,7 @@ const Students = () => {
     setSelectedStudentForLog(student);
     const { data, error } = await supabase
       .from('schedule')
-      .select('*, enrollment:enrollments(tool_type, difficulty, classes(name, type, difficulty))')
+      .select('*, enrollment:enrollments(tool_type, difficulty, preferred_time, schedule_days, sessions_total, renew_on_completion, classes(name, type, difficulty, total_sessions))')
       .eq('student_id', student.id)
       .order('scheduled_at', { ascending: false });
     
@@ -187,34 +206,57 @@ const Students = () => {
       .eq('id', scheduleId);
     
     if (!error) {
+      const updatedItem = attendanceLog.find(item => item.id === scheduleId);
       setAttendanceLog(prev => prev.map(item => 
         item.id === scheduleId ? { ...item, status: newStatus } : item
       ));
+      if (newStatus === 'attended' && updatedItem?.enrollment && selectedStudentForLog) {
+        try {
+          await maybeAutoRenewEnrollment({
+            ...updatedItem.enrollment,
+            id: updatedItem.enrollment_id,
+            student_id: selectedStudentForLog.id,
+          });
+        } catch (renewError) {
+          console.error('Auto-renew failed:', renewError);
+        }
+      }
       fetchData(); // Refresh main view to update "lessons left"
+      if (selectedStudentForLog) {
+        fetchAttendanceLog(selectedStudentForLog);
+      }
     }
   };
 
   const handleAddStudent = async (e) => {
     e.preventDefault();
-    const { error } = await supabase.from('students').insert([formData]);
+    const { error } = await supabase.from('students').insert([{
+      ...formData,
+      created_at: toStoredDateTime(formData.created_at),
+    }]);
     if (!error) {
       setIsAddModalOpen(false);
-      setFormData({ name: '', phone: '' });
+      setFormData({ name: '', phone: '', created_at: new Date().toISOString().split('T')[0] });
       fetchData();
+      return;
     }
+    alert(`수강생 등록 중 오류가 발생했습니다: ${error.message}`);
   };
 
   const handleUpdateStudent = async (e) => {
     e.preventDefault();
     const { error } = await supabase.from('students').update({
       name: editingStudent.name,
-      phone: editingStudent.phone
+      phone: editingStudent.phone,
+      created_at: toStoredDateTime(editingStudent.created_at),
     }).eq('id', editingStudent.id);
 
     if (!error) {
       setEditingStudent(null);
       fetchData();
+      return;
     }
+    alert(`수강생 수정 중 오류가 발생했습니다: ${error.message}`);
   };
 
   const handleDeleteStudent = async (id) => {
@@ -255,38 +297,13 @@ const Students = () => {
   };
 
   const generateSchedule = async (studentId, enrollmentId, targetClass, time, scheduleDays) => {
-    const effectiveScheduleDays = scheduleDays?.length ? scheduleDays : targetClass.schedule_days || [];
-    if (effectiveScheduleDays.length === 0) return true;
-
-    const scheduleEntries = [];
-    const dayMap = { '일': 0, '월': 1, '화': 2, '수': 3, '목': 4, '금': 5, '토': 6 };
-    const targetDays = effectiveScheduleDays.map(d => dayMap[d]);
-    
-    // Parse time
-    const timeParts = (time || '10:00').split(':');
-    const hour = parseInt(timeParts[0]);
-    const minute = parseInt(timeParts[1] || '0');
-    
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Generate for the next 8 weeks (or until total sessions)
-    for (let i = 0; i < 60; i++) {
-      const date = new Date(today);
-      date.setDate(today.getDate() + i);
-      
-      if (targetDays.includes(date.getDay())) {
-        date.setHours(hour, minute, 0, 0);
-        scheduleEntries.push({
-          student_id: studentId,
-          enrollment_id: enrollmentId,
-          scheduled_at: date.toISOString(),
-          status: 'scheduled'
-        });
-        
-        if (scheduleEntries.length >= (targetClass.total_sessions || 4)) break;
-      }
-    }
+    const scheduleEntries = generateScheduleEntries({
+      studentId,
+      enrollmentId,
+      totalSessions: targetClass.total_sessions || 4,
+      time,
+      scheduleDays,
+    });
 
     if (scheduleEntries.length > 0) {
       const { error } = await supabase.from('schedule').insert(scheduleEntries);
@@ -335,11 +352,11 @@ const Students = () => {
 
   const handleAddEnrollment = async (e) => {
     e.preventDefault();
-    if (!selectedClassId || !enrollingStudent || selectedScheduleDays.length === 0) return;
+    const targetClass = classes.find(c => c.id === selectedClassId);
+    if (!selectedClassId || !enrollingStudent || selectedScheduleDays.length === 0 || !classEndDate) return;
+    if (targetClass?.is_graduation_class && !graduationDate) return;
 
     try {
-      const targetClass = classes.find(c => c.id === selectedClassId);
-      
       // 1. Create the enrollment
       const { data: enrollment, error: enrollmentError } = await supabase
         .from('enrollments')
@@ -351,7 +368,9 @@ const Students = () => {
           schedule_days: selectedScheduleDays,
           sessions_total: targetClass.total_sessions,
           sessions_left: targetClass.total_sessions,
-          preferred_time: preferredTime
+          preferred_time: preferredTime,
+          class_end_date: new Date(`${classEndDate}T09:00:00`).toISOString(),
+          graduation_date: targetClass.is_graduation_class && graduationDate ? new Date(`${graduationDate}T09:00:00`).toISOString() : null,
         }])
         .select()
         .single();
@@ -375,6 +394,8 @@ const Students = () => {
     setSelectedToolType(TOOL_TYPE_OPTIONS[0]);
     setSelectedDifficulty(CURRICULUM_OPTIONS[0]);
     setSelectedScheduleDays([]);
+    setClassEndDate(new Date().toISOString().split('T')[0]);
+    setGraduationDate('');
     setPreferredTime('');
   };
 
@@ -434,6 +455,7 @@ const Students = () => {
   const filteredStudents = students.filter(s => 
     s.name?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const selectedClass = classes.find(c => c.id === selectedClassId);
 
   return (
     <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
@@ -464,75 +486,38 @@ const Students = () => {
         />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '1.5rem' }}>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
         {loading ? (
-          <p style={{ color: '#AAA' }}>로딩 중...</p>
+          <p style={{ color: '#AAA', padding: '2rem' }}>로딩 중...</p>
         ) : filteredStudents.length === 0 ? (
-          <p style={{ color: '#AAA', textAlign: 'center', gridColumn: '1 / -1', padding: '5rem' }}>수강생 정보가 없습니다.</p>
+          <p style={{ color: '#AAA', textAlign: 'center', padding: '5rem' }}>수강생 정보가 없습니다.</p>
         ) : filteredStudents.map(s => (
           <div 
             key={s.id} 
-            className="card" 
             style={{ 
-              border: 'var(--border-thin)', 
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '1.5rem',
-              padding: '1.8rem'
+              display: 'grid',
+              gridTemplateColumns: 'minmax(160px, 1fr) minmax(180px, 1fr) minmax(300px, 2fr) auto',
+              alignItems: 'center',
+              gap: '1rem',
+              padding: '1.2rem 1.5rem',
+              borderBottom: '1px solid rgba(24, 33, 29, 0.08)'
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                <div style={{ backgroundColor: 'var(--color-starbucks-green-soft)', padding: '0.8rem', borderRadius: '12px', color: 'var(--color-starbucks-green)' }}>
-                  <User size={20} />
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{s.name}</h3>
-                  <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem', fontWeight: 500 }}>ID: {s.id.slice(0, 8)}</p>
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '4px' }}>
-                <button 
-                  onClick={() => fetchAttendanceLog(s)}
-                  title="출석 로그"
-                  style={{ background: 'none', border: 'none', color: 'var(--color-starbucks-green)', cursor: 'pointer', padding: '6px', borderRadius: '8px', transition: 'all 0.2s' }}
-                  onMouseEnter={e => e.currentTarget.style.backgroundColor = 'var(--color-starbucks-green-soft)'}
-                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  <Calendar size={16} />
-                </button>
-                <button 
-                  onClick={() => setEditingStudent(s)}
-                  style={{ background: 'none', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: '6px', borderRadius: '8px', transition: 'all 0.2s' }}
-                  onMouseEnter={e => e.currentTarget.style.backgroundColor = '#F3F4F6'}
-                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  <Edit2 size={16} />
-                </button>
-                <button 
-                  onClick={() => handleDeleteStudent(s.id)}
-                  style={{ background: 'none', border: 'none', color: '#F87171', cursor: 'pointer', padding: '6px', borderRadius: '8px', transition: 'all 0.2s' }}
-                  onMouseEnter={e => e.currentTarget.style.backgroundColor = '#FEF2F2'}
-                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  <Trash2 size={16} />
-                </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
+              <div style={{ minWidth: 0 }}>
+                <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>{s.name}</h3>
+                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem', fontWeight: 500 }}>최근 출석: {s.lastAttended}</p>
+                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem', fontWeight: 500 }}>등록일: {s.registeredAt}</p>
               </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#4b5563', fontSize: '0.9rem', fontWeight: 500 }}>
-                <Phone size={14} color="#9CA3AF" />
-                {s.phone}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-muted)', fontSize: '0.85rem', fontWeight: 600 }}>
-                <Check size={14} color="var(--color-starbucks-green)" />
-                최근 출석: {s.lastAttended}
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#4b5563', fontSize: '0.9rem', fontWeight: 500 }}>
+              <Phone size={14} color="#9CA3AF" />
+              {s.phone}
             </div>
 
-            <div style={{ borderTop: 'var(--border-thin)', paddingTop: '1.2rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.7rem' }}>
                 <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>수강 중인 클래스</span>
                 <button 
                   onClick={() => {
@@ -544,44 +529,25 @@ const Students = () => {
                   + 추가
                 </button>
               </div>
-              
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                 {s.enrollments && s.enrollments.length > 0 ? (
                   s.enrollments.map(e => (
                     <div key={e.id} style={{ 
                       display: 'flex', 
-                      justifyContent: 'space-between', 
                       alignItems: 'center',
-                      padding: '10px 12px',
+                      gap: '8px',
+                      padding: '8px 10px',
                       backgroundColor: '#F9FAFB',
-                      borderRadius: '10px',
+                      borderRadius: '999px',
                       border: '1px solid #F3F4F6'
                     }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <BookOpen size={14} color="var(--color-starbucks-green)" />
-                          <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-text-dark)' }}>{e.classes?.name}</span>
-                        </div>
-                        <div style={{ marginLeft: '22px', fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>
-                          {[getEnrollmentToolType(e), getEnrollmentDifficulty(e)].filter(Boolean).join(' · ')}
-                        </div>
-                        {e.schedule_days?.length > 0 && (
-                          <div style={{ marginLeft: '22px', fontSize: '0.75rem', fontWeight: 500, color: '#4b5563' }}>
-                            수업 요일: {e.schedule_days.join(', ')}
-                          </div>
-                        )}
-                        {e.preferred_time && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: '22px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <Clock size={12} color="#9CA3AF" />
-                              <span style={{ fontSize: '0.75rem', fontWeight: 500, color: 'var(--color-text-muted)' }}>{e.preferred_time}</span>
-                            </div>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-starbucks-green)' }}>
-                              {(s.schedule || []).filter(sch => sch.enrollment_id === e.id && sch.status === 'scheduled').length}회 남음
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                      <BookOpen size={14} color="var(--color-starbucks-green)" />
+                      <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--color-text-dark)' }}>{formatEnrollmentLabel(e)}</span>
+                      {e.class_end_date ? <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>종료 {new Date(e.class_end_date).toLocaleDateString()}</span> : null}
+                      {e.graduation_date ? <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>졸업 {new Date(e.graduation_date).toLocaleDateString()}</span> : null}
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-starbucks-green)' }}>
+                        {countScheduledSessions(s.schedule || [], e.id)}회 남음
+                      </span>
                       <div style={{ display: 'flex', gap: '4px' }}>
                         <button 
                           onClick={() => handleSyncSchedule(s, e)}
@@ -605,9 +571,37 @@ const Students = () => {
                     </div>
                   ))
                 ) : (
-                  <p style={{ fontSize: '0.85rem', color: '#9CA3AF', fontStyle: 'italic', textAlign: 'center', padding: '10px' }}>등록된 클래스가 없습니다.</p>
+                  <p style={{ fontSize: '0.85rem', color: '#9CA3AF', fontStyle: 'italic' }}>등록된 클래스가 없습니다.</p>
                 )}
               </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '4px', justifySelf: 'end' }}>
+              <button 
+                onClick={() => fetchAttendanceLog(s)}
+                title="출석 로그"
+                style={{ background: 'none', border: 'none', color: 'var(--color-starbucks-green)', cursor: 'pointer', padding: '6px', borderRadius: '8px', transition: 'all 0.2s' }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = 'var(--color-starbucks-green-soft)'}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                <Calendar size={16} />
+              </button>
+                <button 
+                  onClick={() => setEditingStudent(s)}
+                style={{ background: 'none', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: '6px', borderRadius: '8px', transition: 'all 0.2s' }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = '#F3F4F6'}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <Edit2 size={16} />
+                </button>
+              <button 
+                onClick={() => handleDeleteStudent(s.id)}
+                style={{ background: 'none', border: 'none', color: '#F87171', cursor: 'pointer', padding: '6px', borderRadius: '8px', transition: 'all 0.2s' }}
+                onMouseEnter={e => e.currentTarget.style.backgroundColor = '#FEF2F2'}
+                onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+              >
+                <Trash2 size={16} />
+              </button>
             </div>
           </div>
         ))}
@@ -642,9 +636,23 @@ const Students = () => {
                 <input 
                   type="text" 
                   value={editingStudent ? editingStudent.phone : formData.phone} 
-                  onChange={e => editingStudent ? setEditingStudent({...editingStudent, phone: e.target.value}) : setFormData({...formData, phone: e.target.value})} 
+                  onChange={e => editingStudent ? setEditingStudent({...editingStudent, phone: formatPhoneNumber(e.target.value)}) : setFormData({...formData, phone: formatPhoneNumber(e.target.value)})} 
                   required 
                   placeholder="010-0000-0000"
+                />
+              </div>
+
+              <div style={{ marginBottom: '2.5rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>등록일</label>
+                <input
+                  type="date"
+                  value={editingStudent
+                    ? formatDateInputValue(editingStudent.created_at)
+                    : formData.created_at}
+                  onChange={e => editingStudent
+                    ? setEditingStudent({ ...editingStudent, created_at: e.target.value })
+                    : setFormData({ ...formData, created_at: e.target.value })}
+                  required
                 />
               </div>
               
@@ -769,9 +777,31 @@ const Students = () => {
                   <option value="20:00">20:00</option>
                 </select>
               </div>
+
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>수업 종료일</label>
+                <input
+                  type="date"
+                  value={classEndDate}
+                  onChange={e => setClassEndDate(e.target.value)}
+                  required
+                />
+              </div>
+
+              {selectedClass?.is_graduation_class ? (
+                <div style={{ marginBottom: '2.5rem' }}>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>졸업일</label>
+                  <input
+                    type="date"
+                    value={graduationDate}
+                    onChange={e => setGraduationDate(e.target.value)}
+                    required
+                  />
+                </div>
+              ) : null}
               
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <button type="submit" className="btn-primary" style={{ flex: 1 }} disabled={selectedScheduleDays.length === 0}>수강 등록</button>
+                <button type="submit" className="btn-primary" style={{ flex: 1 }} disabled={selectedScheduleDays.length === 0 || !classEndDate || (selectedClass?.is_graduation_class && !graduationDate)}>수강 등록</button>
                 <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#F3F4F6' }} onClick={() => { setEnrollingStudent(null); resetEnrollmentForm(); }}>취소</button>
               </div>
             </form>

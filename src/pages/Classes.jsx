@@ -10,7 +10,8 @@ const Classes = () => {
   const [formData, setFormData] = useState({
     name: '',
     total_sessions: 4,
-    default_sessions_per_week: 1
+    default_sessions_per_week: 1,
+    is_graduation_class: false,
   });
   const [confirmModal, setConfirmModal] = useState({ 
     isOpen: false, 
@@ -38,7 +39,8 @@ const Classes = () => {
       setFormData({ 
         name: '', 
         total_sessions: 4, 
-        default_sessions_per_week: 1
+        default_sessions_per_week: 1,
+        is_graduation_class: false,
       });
       fetchClasses();
     }
@@ -49,7 +51,8 @@ const Classes = () => {
     const { error } = await supabase.from('classes').update({
       name: editingClass.name,
       total_sessions: editingClass.total_sessions,
-      default_sessions_per_week: editingClass.default_sessions_per_week
+      default_sessions_per_week: editingClass.default_sessions_per_week,
+      is_graduation_class: Boolean(editingClass.is_graduation_class),
     }).eq('id', editingClass.id);
 
     if (!error) {
@@ -128,6 +131,11 @@ const Classes = () => {
               <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>
                 수강생 등록 시 도구 유형, 커리큘럼 난이도, 수업 요일을 별도로 선택합니다.
               </p>
+              {c.is_graduation_class ? (
+                <div style={{ marginTop: '0.7rem', display: 'inline-flex', padding: '4px 10px', borderRadius: '999px', backgroundColor: 'var(--color-starbucks-green-soft)', color: 'var(--color-starbucks-green)', fontSize: '0.75rem', fontWeight: 700 }}>
+                  졸업 구분
+                </div>
+              ) : null}
             </div>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', borderTop: 'var(--border-thin)', paddingTop: '1.2rem' }}>
@@ -174,6 +182,39 @@ const Classes = () => {
                 <div>
                   <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>주간 권장 횟수</label>
                   <input type="number" value={editingClass ? editingClass.default_sessions_per_week : formData.default_sessions_per_week} onChange={e => editingClass ? setEditingClass({...editingClass, default_sessions_per_week: parseInt(e.target.value)}) : setFormData({...formData, default_sessions_per_week: parseInt(e.target.value)})} />
+                </div>
+              </div>
+
+              <div
+                style={{
+                  marginBottom: '2rem',
+                  padding: '1rem',
+                  backgroundColor: 'var(--color-starbucks-green-soft)',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  cursor: 'pointer',
+                }}
+                onClick={() => editingClass
+                  ? setEditingClass({ ...editingClass, is_graduation_class: !editingClass.is_graduation_class })
+                  : setFormData({ ...formData, is_graduation_class: !formData.is_graduation_class })}
+              >
+                <div style={{
+                  width: '20px',
+                  height: '20px',
+                  borderRadius: '6px',
+                  border: '2px solid var(--color-starbucks-green)',
+                  backgroundColor: (editingClass ? editingClass.is_graduation_class : formData.is_graduation_class) ? 'var(--color-starbucks-green)' : 'transparent',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  {(editingClass ? editingClass.is_graduation_class : formData.is_graduation_class) ? <span style={{ color: '#fff', fontSize: '0.7rem', fontWeight: 700 }}>✓</span> : null}
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--color-text-dark)' }}>졸업 구분</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>이 클래스를 수강생에게 등록할 때 졸업일 입력이 필요합니다.</div>
                 </div>
               </div>
               

@@ -3,6 +3,7 @@ import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import { CheckCircle2, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { maybeAutoRenewEnrollment } from '../lib/enrollmentScheduling';
 
 const AttendanceKiosk = () => {
   const [currentStudents, setCurrentStudents] = useState([]);
@@ -36,7 +37,7 @@ const AttendanceKiosk = () => {
 
       const { data, error } = await supabase
         .from('schedule')
-        .select('*, students(*)')
+        .select('*, students(*), enrollments(*, classes(total_sessions))')
         .eq('status', 'scheduled')
         .gte('scheduled_at', oneHourAgo)
         .lte('scheduled_at', tenMinutesFromNow)
@@ -86,6 +87,10 @@ const AttendanceKiosk = () => {
 
       if (updateError) {
         throw updateError;
+      }
+
+      if (item.enrollments) {
+        await maybeAutoRenewEnrollment(item.enrollments);
       }
 
       setShowSuccess(item.students?.name || '수강생');

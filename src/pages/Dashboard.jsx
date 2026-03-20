@@ -4,9 +4,11 @@ import { ko } from 'date-fns/locale';
 import { AlertCircle, Calendar as CalendarIcon, ChevronRight, Clock, Info, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { formatEnrollmentLabel } from '../lib/enrollment';
+import { countScheduledSessions } from '../lib/enrollmentScheduling';
 
 const Dashboard = () => {
   const [todaySchedule, setTodaySchedule] = useState([]);
+  const [renewalCandidates, setRenewalCandidates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -35,29 +37,77 @@ const Dashboard = () => {
     const start = startOfDay(today).toISOString();
     const end = endOfDay(today).toISOString();
 
-    const { data, error: fetchError } = await supabase
-      .from('schedule')
-      .select(`
-        *,
-        students (*),
-        enrollments (
+    const [todayResult, renewalResult] = await Promise.all([
+      supabase
+        .from('schedule')
+        .select(`
           *,
-          classes (name, type, difficulty)
-        )
-      `)
-      .gte('scheduled_at', start)
-      .lte('scheduled_at', end)
-      .order('scheduled_at', { ascending: true });
+          students (*),
+          enrollments (
+            *,
+            classes (name, type, difficulty, total_sessions)
+          )
+        `)
+        .gte('scheduled_at', start)
+        .lte('scheduled_at', end)
+        .order('scheduled_at', { ascending: true }),
+      supabase
+        .from('enrollments')
+        .select(`
+          *,
+          students (name, phone),
+          classes (name, type, difficulty, total_sessions),
+          schedule (id, status, scheduled_at, enrollment_id)
+        `),
+    ]);
 
-    if (fetchError) {
-      console.error(fetchError);
+    if (todayResult.error) {
+      console.error(todayResult.error);
       setTodaySchedule([]);
       setError('오늘 일정을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.');
     } else {
-      setTodaySchedule(data || []);
+      setTodaySchedule(todayResult.data || []);
+    }
+
+    if (renewalResult.error) {
+      console.error(renewalResult.error);
+      setRenewalCandidates([]);
+    } else {
+      const candidates = (renewalResult.data || []).filter((enrollment) => countScheduledSessions(enrollment.schedule || [], enrollment.id) === 1);
+      setRenewalCandidates(candidates);
     }
 
     setLoading(false);
+  };
+
+  const handleReserveRetake = async (enrollmentId) => {
+    const { error: updateError } = await supabase
+      .from('enrollments')
+      .update({ renew_on_completion: true })
+      .eq('id', enrollmentId);
+
+    if (updateError) {
+      console.error(updateError);
+      setConfirmModal({
+        isOpen: true,
+        title: '오류',
+        message: '재수강 예약에 실패했습니다. 다시 시도해주세요.',
+        isDanger: true,
+        onConfirm: () => setConfirmModal(prev => ({ ...prev, isOpen: false })),
+      });
+      return;
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      title: '재수강 예약 완료',
+      message: '마지막 수업이 출석 처리되면 같은 설정으로 다음 회차가 자동 생성됩니다.',
+      isDanger: false,
+      onConfirm: () => {
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+        fetchTodaySchedule();
+      },
+    });
   };
 
   const openPostponeModal = () => {
@@ -191,6 +241,46 @@ const Dashboard = () => {
           ))}
         </div>
       )}
+
+      {!loading && renewalCandidates.length > 0 ? (
+        <section className="glass-panel" style={{ marginTop: '28px', padding: '24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div>
+              <div className="brand-mark">Renewal</div>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 800, marginTop: '12px' }}>1회 남은 수강생</h2>
+            </div>
+            <span className="status-pill neutral">총 {renewalCandidates.length}명</span>
+          </div>
+          <div style={{ display: 'grid', gap: '10px' }}>
+            {renewalCandidates.map((enrollment) => (
+              <div
+                key={enrollment.id}
+                className="card"
+                style={{
+                  padding: '14px 16px',
+                  display: 'grid',
+                  gridTemplateColumns: '1fr auto',
+                  alignItems: 'center',
+                  gap: '16px',
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700 }}>{enrollment.students?.name || '이름 없음'}</div>
+                  <div className="muted" style={{ fontSize: '0.9rem' }}>{formatEnrollmentLabel(enrollment)}</div>
+                </div>
+                <button
+                  className="btn-secondary"
+                  disabled={Boolean(enrollment.renew_on_completion)}
+                  onClick={() => handleReserveRetake(enrollment.id)}
+                  style={{ minWidth: '96px' }}
+                >
+                  {enrollment.renew_on_completion ? '예약됨' : '재수강'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {selectedStudent ? (
         <div className="modal-backdrop" style={{ zIndex: 1000 }} onClick={() => setSelectedStudent(null)}>
