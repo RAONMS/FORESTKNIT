@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { Plus, Trash2, Edit2, Scissors, Layers, BookOpen, X, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Edit2, BookOpen, X, AlertCircle } from 'lucide-react';
 
 const Classes = () => {
   const [classes, setClasses] = useState([]);
@@ -9,11 +9,8 @@ const Classes = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [formData, setFormData] = useState({
     name: '',
-    difficulty: '입문과',
-    type: '코바늘',
     total_sessions: 4,
-    default_sessions_per_week: 1,
-    schedule_days: []
+    default_sessions_per_week: 1
   });
   const [confirmModal, setConfirmModal] = useState({ 
     isOpen: false, 
@@ -40,11 +37,8 @@ const Classes = () => {
       setIsAddModalOpen(false);
       setFormData({ 
         name: '', 
-        difficulty: '입문과', 
-        type: '코바늘', 
         total_sessions: 4, 
-        default_sessions_per_week: 1,
-        schedule_days: []
+        default_sessions_per_week: 1
       });
       fetchClasses();
     }
@@ -54,11 +48,8 @@ const Classes = () => {
     e.preventDefault();
     const { error } = await supabase.from('classes').update({
       name: editingClass.name,
-      type: editingClass.type,
-      difficulty: editingClass.difficulty,
       total_sessions: editingClass.total_sessions,
-      default_sessions_per_week: editingClass.default_sessions_per_week,
-      schedule_days: editingClass.schedule_days
+      default_sessions_per_week: editingClass.default_sessions_per_week
     }).eq('id', editingClass.id);
 
     if (!error) {
@@ -110,7 +101,7 @@ const Classes = () => {
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div style={{ backgroundColor: 'var(--color-starbucks-green-soft)', padding: '0.8rem', borderRadius: '12px', color: 'var(--color-starbucks-green)' }}>
-                {c.type === '코바늘' ? <Scissors size={20} /> : <Layers size={20} />}
+                <BookOpen size={20} />
               </div>
               <div style={{ display: 'flex', gap: '4px' }}>
                 <button 
@@ -134,40 +125,15 @@ const Classes = () => {
 
             <div>
               <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--color-text-dark)', marginBottom: '0.6rem' }}>{c.name}</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '4px 10px', borderRadius: '6px', backgroundColor: 'var(--color-starbucks-green-soft)', color: 'var(--color-starbucks-green)', border: 'var(--border-green-soft)' }}>{c.type}</span>
-                <span style={{ fontSize: '0.7rem', fontWeight: 700, padding: '4px 10px', borderRadius: '6px', backgroundColor: '#F3F4F6', color: '#6B7280', border: '1px solid #E5E7EB' }}>{c.difficulty}</span>
-              </div>
+              <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>
+                수강생 등록 시 도구 유형, 커리큘럼 난이도, 수업 요일을 별도로 선택합니다.
+              </p>
             </div>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', borderTop: 'var(--border-thin)', paddingTop: '1.2rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#4B5563', fontSize: '0.9rem', fontWeight: 600 }}>
                 <BookOpen size={14} color="#9CA3AF" />
                 정규 {c.total_sessions}회 과정
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>
-                {['월', '화', '수', '목', '금', '토'].map(day => {
-                  const isActive = c.schedule_days?.includes(day);
-                  return (
-                    <span 
-                      key={day} 
-                      style={{ 
-                        fontSize: '0.65rem', 
-                        fontWeight: 800, 
-                        width: '20px', 
-                        height: '20px', 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        justifyContent: 'center', 
-                        borderRadius: '4px',
-                        backgroundColor: isActive ? 'var(--color-starbucks-green)' : '#F3F4F6',
-                        color: isActive ? '#FFF' : '#9CA3AF'
-                      }}
-                    >
-                      {day}
-                    </span>
-                  );
-                })}
               </div>
               <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', fontWeight: 500 }}>최적 학습 주기: 주 {c.default_sessions_per_week}회</p>
             </div>
@@ -198,71 +164,6 @@ const Classes = () => {
                   required 
                   placeholder="예: 니팅 마스터 코바늘 반"
                 />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.2rem', marginBottom: '1.5rem' }}>
-                <div>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>도구 유형</label>
-                  <select value={editingClass ? editingClass.type : formData.type} onChange={e => editingClass ? setEditingClass({...editingClass, type: e.target.value}) : setFormData({...formData, type: e.target.value})}>
-                    <option value="코바늘">코바늘</option>
-                    <option value="대바늘">대바늘</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>커리큘럼 난이도</label>
-                  <select value={editingClass ? editingClass.difficulty : formData.difficulty} onChange={e => editingClass ? setEditingClass({...editingClass, difficulty: e.target.value}) : setFormData({...formData, difficulty: e.target.value})}>
-                    <option value="입문과">입문과</option>
-                    <option value="강사과">강사과</option>
-                    <option value="해당 없음">해당 없음</option>
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '2.5rem' }}>
-                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.8rem', display: 'block' }}>수업 요일 설정</label>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {['월', '화', '수', '목', '금', '토'].map(day => {
-                    const isActive = editingClass 
-                      ? editingClass.schedule_days?.includes(day)
-                      : formData.schedule_days?.includes(day);
-                    
-                    const toggleDay = () => {
-                      if (editingClass) {
-                        const newDays = isActive 
-                          ? editingClass.schedule_days.filter(d => d !== day)
-                          : [...(editingClass.schedule_days || []), day];
-                        setEditingClass({...editingClass, schedule_days: newDays});
-                      } else {
-                        const newDays = isActive 
-                          ? formData.schedule_days.filter(d => d !== day)
-                          : [...formData.schedule_days, day];
-                        setFormData({...formData, schedule_days: newDays});
-                      }
-                    };
-
-                    return (
-                      <button
-                        key={day}
-                        type="button"
-                        onClick={toggleDay}
-                        style={{
-                          flex: 1,
-                          padding: '10px 0',
-                          borderRadius: '10px',
-                          fontSize: '0.85rem',
-                          fontWeight: 700,
-                          border: isActive ? '1px solid var(--color-starbucks-green)' : '1px solid #E5E7EB',
-                          backgroundColor: isActive ? 'var(--color-starbucks-green-soft)' : '#F9FAFB',
-                          color: isActive ? 'var(--color-starbucks-green)' : '#9CA3AF',
-                          cursor: 'pointer',
-                          transition: 'all 0.2s'
-                        }}
-                      >
-                        {day}
-                      </button>
-                    );
-                  })}
-                </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.2rem', marginBottom: '3rem' }}>

@@ -3,6 +3,7 @@ import { format, endOfDay, startOfDay } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import { AlertCircle, Calendar as CalendarIcon, ChevronRight, Clock, Info, User } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { formatEnrollmentLabel } from '../lib/enrollment';
 
 const Dashboard = () => {
   const [todaySchedule, setTodaySchedule] = useState([]);
@@ -41,7 +42,7 @@ const Dashboard = () => {
         students (*),
         enrollments (
           *,
-          classes (*)
+          classes (name, type, difficulty)
         )
       `)
       .gte('scheduled_at', start)
@@ -170,7 +171,7 @@ const Dashboard = () => {
               <div>
                 <h3 style={{ fontSize: '1.08rem', marginBottom: '0.2rem', fontWeight: 700 }}>{item.students?.name || '이름 없음'}</h3>
                 <p className="muted" style={{ fontSize: '0.9rem' }}>
-                  {item.enrollments?.classes?.name || '일반 수업'}
+                  {formatEnrollmentLabel(item.enrollments)}
                 </p>
               </div>
 
@@ -210,7 +211,7 @@ const Dashboard = () => {
               </div>
               <div>
                 <p className="field-label">현재 클래스</p>
-                <p style={{ fontSize: '1.05rem', fontWeight: 600, marginTop: '0.5rem' }}>{selectedStudent.enrollments?.classes?.name || '미지정'}</p>
+                <p style={{ fontSize: '1.05rem', fontWeight: 600, marginTop: '0.5rem' }}>{formatEnrollmentLabel(selectedStudent.enrollments)}</p>
               </div>
             </div>
 

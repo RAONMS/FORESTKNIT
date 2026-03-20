@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { Plus, Search, User, Phone, Calendar, Edit2, Trash2, X, Check, BookOpen, ChevronRight, Clock, AlertCircle } from 'lucide-react';
+import { CURRICULUM_OPTIONS, TOOL_TYPE_OPTIONS, formatEnrollmentLabel, getEnrollmentDifficulty, getEnrollmentToolType } from '../lib/enrollment';
 
 const Students = () => {
+  const dayOptions = ['월', '화', '수', '목', '금', '토'];
   const [students, setStudents] = useState([]);
   const [classes, setClasses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -12,6 +14,9 @@ const Students = () => {
   const [formData, setFormData] = useState({ name: '', phone: '' });
   const [enrollingStudent, setEnrollingStudent] = useState(null);
   const [selectedClassId, setSelectedClassId] = useState('');
+  const [selectedToolType, setSelectedToolType] = useState(TOOL_TYPE_OPTIONS[0]);
+  const [selectedDifficulty, setSelectedDifficulty] = useState(CURRICULUM_OPTIONS[0]);
+  const [selectedScheduleDays, setSelectedScheduleDays] = useState([]);
   const [preferredTime, setPreferredTime] = useState('');
   const [selectedStudentForLog, setSelectedStudentForLog] = useState(null);
   const [attendanceLog, setAttendanceLog] = useState([]);
@@ -76,7 +81,7 @@ const Students = () => {
     setSelectedStudentForLog(student);
     const { data, error } = await supabase
       .from('schedule')
-      .select('*, enrollment:enrollments(classes(name))')
+      .select('*, enrollment:enrollments(tool_type, difficulty, classes(name, type, difficulty))')
       .eq('student_id', student.id)
       .order('scheduled_at', { ascending: false });
     
@@ -249,12 +254,13 @@ const Students = () => {
     });
   };
 
-  const generateSchedule = async (studentId, enrollmentId, targetClass, time) => {
-    if (!targetClass.schedule_days || targetClass.schedule_days.length === 0) return true;
+  const generateSchedule = async (studentId, enrollmentId, targetClass, time, scheduleDays) => {
+    const effectiveScheduleDays = scheduleDays?.length ? scheduleDays : targetClass.schedule_days || [];
+    if (effectiveScheduleDays.length === 0) return true;
 
     const scheduleEntries = [];
     const dayMap = { '일': 0, '월': 1, '화': 2, '수': 3, '목': 4, '금': 5, '토': 6 };
-    const targetDays = targetClass.schedule_days.map(d => dayMap[d]);
+    const targetDays = effectiveScheduleDays.map(d => dayMap[d]);
     
     // Parse time
     const timeParts = (time || '10:00').split(':');
@@ -305,7 +311,7 @@ const Students = () => {
           message: '이미 생성된 일정이 있습니다. 무시하고 추가로 생성하시겠습니까?',
           onConfirm: async () => {
             const targetClass = classes.find(c => c.id === enrollment.class_id);
-            await generateSchedule(student.id, enrollment.id, targetClass, enrollment.preferred_time);
+            await generateSchedule(student.id, enrollment.id, targetClass, enrollment.preferred_time, enrollment.schedule_days);
             alert('일정이 성공적으로 생성되었습니다.');
             setConfirmModal(prev => ({ ...prev, isOpen: false }));
             fetchData();
@@ -316,7 +322,7 @@ const Students = () => {
       }
 
       const targetClass = classes.find(c => c.id === enrollment.class_id);
-      await generateSchedule(student.id, enrollment.id, targetClass, enrollment.preferred_time);
+      await generateSchedule(student.id, enrollment.id, targetClass, enrollment.preferred_time, enrollment.schedule_days);
       alert('일정이 성공적으로 생성되었습니다.');
       fetchData();
     } catch (err) {
@@ -329,7 +335,7 @@ const Students = () => {
 
   const handleAddEnrollment = async (e) => {
     e.preventDefault();
-    if (!selectedClassId || !enrollingStudent) return;
+    if (!selectedClassId || !enrollingStudent || selectedScheduleDays.length === 0) return;
 
     try {
       const targetClass = classes.find(c => c.id === selectedClassId);
@@ -340,6 +346,9 @@ const Students = () => {
         .insert([{
           student_id: enrollingStudent.id,
           class_id: selectedClassId,
+          tool_type: selectedToolType,
+          difficulty: selectedDifficulty,
+          schedule_days: selectedScheduleDays,
           sessions_total: targetClass.total_sessions,
           sessions_left: targetClass.total_sessions,
           preferred_time: preferredTime
@@ -350,16 +359,23 @@ const Students = () => {
       if (enrollmentError) throw enrollmentError;
 
       // 2. Automatically generate schedule entries
-      await generateSchedule(enrollingStudent.id, enrollment.id, targetClass, preferredTime);
+      await generateSchedule(enrollingStudent.id, enrollment.id, targetClass, preferredTime, selectedScheduleDays);
 
       setEnrollingStudent(null);
-      setSelectedClassId('');
-      setPreferredTime('');
+      resetEnrollmentForm();
       fetchData();
     } catch (err) {
       console.error(err);
       alert(`수강 등록 중 오류가 발생했습니다: ${err.message}`);
     }
+  };
+
+  const resetEnrollmentForm = () => {
+    setSelectedClassId('');
+    setSelectedToolType(TOOL_TYPE_OPTIONS[0]);
+    setSelectedDifficulty(CURRICULUM_OPTIONS[0]);
+    setSelectedScheduleDays([]);
+    setPreferredTime('');
   };
 
   const handleRemoveEnrollment = async (enrollmentId) => {
@@ -505,7 +521,7 @@ const Students = () => {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#4B5563', fontSize: '0.9rem', fontWeight: 500 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#4b5563', fontSize: '0.9rem', fontWeight: 500 }}>
                 <Phone size={14} color="#9CA3AF" />
                 {s.phone}
               </div>
@@ -519,7 +535,10 @@ const Students = () => {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>수강 중인 클래스</span>
                 <button 
-                  onClick={() => setEnrollingStudent(s)}
+                  onClick={() => {
+                    resetEnrollmentForm();
+                    setEnrollingStudent(s);
+                  }}
                   style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-starbucks-green)', background: 'var(--color-starbucks-green-soft)', padding: '4px 10px', borderRadius: '6px' }}
                 >
                   + 추가
@@ -543,6 +562,14 @@ const Students = () => {
                           <BookOpen size={14} color="var(--color-starbucks-green)" />
                           <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-text-dark)' }}>{e.classes?.name}</span>
                         </div>
+                        <div style={{ marginLeft: '22px', fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)' }}>
+                          {[getEnrollmentToolType(e), getEnrollmentDifficulty(e)].filter(Boolean).join(' · ')}
+                        </div>
+                        {e.schedule_days?.length > 0 && (
+                          <div style={{ marginLeft: '22px', fontSize: '0.75rem', fontWeight: 500, color: '#4b5563' }}>
+                            수업 요일: {e.schedule_days.join(', ')}
+                          </div>
+                        )}
                         {e.preferred_time && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginLeft: '22px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -623,7 +650,7 @@ const Students = () => {
               
               <div style={{ display: 'flex', gap: '1rem' }}>
                 <button type="submit" className="btn-primary" style={{ flex: 1 }}>{editingStudent ? '저장하기' : '등록하기'}</button>
-                <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#4B5563' }} onClick={() => { setIsAddModalOpen(false); setEditingStudent(null); }}>취소</button>
+                <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#F3F4F6' }} onClick={() => { setIsAddModalOpen(false); setEditingStudent(null); }}>취소</button>
               </div>
             </form>
           </div>
@@ -636,11 +663,11 @@ const Students = () => {
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           backgroundColor: 'rgba(0,0,0,0.3)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: 1000
-        }} onClick={() => { setEnrollingStudent(null); setSelectedClassId(''); }}>
+        }} onClick={() => { setEnrollingStudent(null); resetEnrollmentForm(); }}>
           <div className="card" style={{ width: '90%', maxWidth: '400px', padding: '2.5rem' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
               <h2 style={{ fontSize: '1.3rem', fontWeight: 800 }}>클래스 수강 등록</h2>
-              <button onClick={() => { setEnrollingStudent(null); setSelectedClassId(''); }} style={{ background: 'none', color: '#9CA3AF' }}><X size={20} /></button>
+              <button onClick={() => { setEnrollingStudent(null); resetEnrollmentForm(); }} style={{ background: 'none', color: '#9CA3AF' }}><X size={20} /></button>
             </div>
             
             <p style={{ marginBottom: '1.5rem', color: 'var(--color-text-muted)', fontSize: '0.95rem' }}>
@@ -648,6 +675,31 @@ const Students = () => {
             </p>
 
             <form onSubmit={handleAddEnrollment}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>도구 유형</label>
+                  <select
+                    value={selectedToolType}
+                    onChange={e => setSelectedToolType(e.target.value)}
+                  >
+                    {TOOL_TYPE_OPTIONS.map(option => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>커리큘럼 난이도</label>
+                  <select
+                    value={selectedDifficulty}
+                    onChange={e => setSelectedDifficulty(e.target.value)}
+                  >
+                    {CURRICULUM_OPTIONS.map(option => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
               <div style={{ marginBottom: '1.5rem' }}>
                 <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase' }}>클래스 선택</label>
                 <select 
@@ -655,11 +707,49 @@ const Students = () => {
                   onChange={e => setSelectedClassId(e.target.value)}
                   required
                 >
-                  <option value="">클래스를 선택하세요</option>
+                  <option value="">{classes.length > 0 ? '클래스를 선택하세요' : '등록된 클래스가 없습니다'}</option>
                   {classes.map(c => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.type})</option>
+                    <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
+              </div>
+
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-muted)', textTransform: 'uppercase', marginBottom: '0.8rem', display: 'block' }}>수업 요일 선택</label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {dayOptions.map(day => {
+                    const isActive = selectedScheduleDays.includes(day);
+                    const toggleDay = () => {
+                      setSelectedScheduleDays(prev =>
+                        prev.includes(day)
+                          ? prev.filter(item => item !== day)
+                          : [...prev, day]
+                      );
+                    };
+
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={toggleDay}
+                        style={{
+                          flex: 1,
+                          padding: '10px 0',
+                          borderRadius: '10px',
+                          fontSize: '0.85rem',
+                          fontWeight: 700,
+                          border: isActive ? '1px solid var(--color-starbucks-green)' : '1px solid #E5E7EB',
+                          backgroundColor: isActive ? 'var(--color-starbucks-green-soft)' : '#F9FAFB',
+                          color: isActive ? 'var(--color-starbucks-green)' : '#9CA3AF',
+                          cursor: 'pointer',
+                          transition: 'all 0.2s'
+                        }}
+                      >
+                        {day}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               <div style={{ marginBottom: '2.5rem' }}>
@@ -681,8 +771,8 @@ const Students = () => {
               </div>
               
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <button type="submit" className="btn-primary" style={{ flex: 1 }}>수강 등록</button>
-                <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#4B5563' }} onClick={() => { setEnrollingStudent(null); setSelectedClassId(''); }}>취소</button>
+                <button type="submit" className="btn-primary" style={{ flex: 1 }} disabled={selectedScheduleDays.length === 0}>수강 등록</button>
+                <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#F3F4F6' }} onClick={() => { setEnrollingStudent(null); resetEnrollmentForm(); }}>취소</button>
               </div>
             </form>
           </div>
@@ -752,7 +842,7 @@ const Students = () => {
                             {new Date(item.scheduled_at).toLocaleDateString()} {new Date(item.scheduled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </td>
                           <td style={{ padding: '1rem 0', fontSize: '0.85rem', fontWeight: 600 }}>
-                            {item.enrollment?.classes?.name || '정보 없음'}
+                            {formatEnrollmentLabel(item.enrollment)}
                           </td>
                           <td style={{ padding: '1rem 0' }}>
                             <select 
@@ -821,7 +911,7 @@ const Students = () => {
                   required
                 >
                   {selectedStudentForLog.enrollments.map(e => (
-                    <option key={e.id} value={e.id}>{e.classes?.name}</option>
+                    <option key={e.id} value={e.id}>{formatEnrollmentLabel(e)}</option>
                   ))}
                 </select>
               </div>
@@ -884,7 +974,7 @@ const Students = () => {
               
               <div style={{ display: 'flex', gap: '1rem' }}>
                 <button type="submit" className="btn-primary" style={{ flex: 1 }}>수업 추가</button>
-                <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#4B5563' }} onClick={() => setIsAddSessionModalOpen(false)}>취소</button>
+                <button type="button" className="btn-primary" style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#F3F4F6' }} onClick={() => setIsAddSessionModalOpen(false)}>취소</button>
               </div>
             </form>
           </div>
@@ -917,7 +1007,7 @@ const Students = () => {
               <button 
                 onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))} 
                 className="btn-primary" 
-                style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#4B5563' }}
+                style={{ flex: 1, backgroundColor: '#F3F4F6', color: '#F3F4F6' }}
               >
                 취소
               </button>

@@ -16,6 +16,7 @@ import {
 import { ko } from 'date-fns/locale';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { formatEnrollmentLabel } from '../lib/enrollment';
 
 const Schedule = () => {
   const [view, setView] = useState('weekly');
@@ -51,7 +52,9 @@ const Schedule = () => {
         students (name),
         enrollments (
           preferred_time,
-          classes (name)
+          tool_type,
+          difficulty,
+          classes (name, type, difficulty)
         )
       `)
       .gte('scheduled_at', start)
@@ -214,7 +217,7 @@ const Schedule = () => {
                             <span className="muted" style={{ fontSize: '0.68rem' }}>{format(parseISO(schedule.scheduled_at), 'HH:mm')}</span>
                           </div>
                           <div style={{ color: 'var(--bg-accent-deep)', fontWeight: 700, fontSize: '0.72rem' }}>
-                            {schedule.enrollments?.classes?.name || '클래스 미지정'}
+                            {formatEnrollmentLabel(schedule.enrollments)}
                           </div>
                         </div>
                       ))}
@@ -280,7 +283,7 @@ const Schedule = () => {
                     }}
                   >
                     <strong>{schedule.students?.name}</strong>
-                    <span className="muted">{format(parseISO(schedule.scheduled_at), 'HH:mm')} · {schedule.enrollments?.classes?.name || '일반 수업'}</span>
+                    <span className="muted">{format(parseISO(schedule.scheduled_at), 'HH:mm')} · {formatEnrollmentLabel(schedule.enrollments)}</span>
                   </div>
                 ))}
               </div>
